@@ -1,0 +1,171 @@
+Human Activity Performance Recognition
+========================================================
+
+### Introduction:
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+### Data:
+
+The training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+Data is very detailed and has around 160 variables including participants names, time stamps for when the data was captured, measurements and class. Class determines how well the task has been done. (Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes)
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz38Yj1Dfya)
+
+### Exploratary Data Analysis & Data Cleansing:
+
+Let's have a look at the data. 
+
+```{r}
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+```
+
+Having looked at the training data set, it appears that lot of columns have NAs and 0 values. So, let's drop such columns from our data set where majority of the values are N/A or 0.
+
+- *Note: Data has not been summarized here as it's taking too much of space.*
+
+Reloading the training data set considering "#DIV/0!" as NA.
+
+```{r}
+training <- read.csv("pml-training.csv",na.strings=c("#DIV/0!",NA))
+```
+
+Now, filtering columns that are all 0/NA.
+
+```{r}
+keep <- colSums(training!=0) != 0
+keep <- keep[keep == TRUE]
+training <- training[,names(keep[!is.na(names(keep))])]
+length(names(training))
+```
+
+After filtering out unknown and 0 value columns, we are left with 60 variables.
+Let's have a look at the variables and do some feature selection based on variables and variance.
+
+```{r}
+names(training)
+suppressWarnings(library(caret,quietly = T))
+nearZeroVar(training)
+```
+
+The most important variables for us to determine class variable is the measurement data which tells us how the task has been performed so following variables are not of much use:
+- x *(This is just row number so can be dropped from the data frame)*
+- user_name *(measurements does not depend on name of user, so, this can be dropped)*
+- raw_timestamp_part_1 *(considering these are timestamps when measurements were taken so this can be dropped)*
+- raw_timestamp_part_2 *(considering these are timestamps when measurements were taken so this can be dropped)*
+- cvtd_timestamp *(considering these are timestamps when measurements were taken so this can be dropped)*
+- new_window *(this column can be dropped as this has pretty less variance in terms of data, also indicated by the formula nearZeroVar)*
+- num_window *(this is simply window number but let's check if there is any relation with classe variable)*
+
+Plotting a graph for num_window and classe variable.
+
+```{r fig.width=7, fig.height=6}
+qplot(num_window,classe,color=classe,data=training)
+```
+
+By looking at the graph, it looks like specific values of num_window variable corresponds to specific classe values. Let's confirm it with contingency table.
+
+```{r}
+head(table(training$num_window,training$classe),20)
+```
+
+It's very clear that num_window variable is mapped to classe variable and there is no overlap. So, num_window variable can alone predict the classe variable for this kind of dataset. But, this is not a measurement variable so lets drop this column and train our model using the actual measurement columns.
+
+New data set which will be used for training will be
+
+```{r}
+training <- training[,-c(1:7)]
+length(names(training))
+```
+
+So, final training dataset has 53 variables including the variable which is to be predicted.
+
+### Data Slicing, Pre-processing & Modelling
+
+Now, when we have the final dataset which can be used for training the model, let's partition it into training and test data set.
+
+```{r}
+set.seed(123)
+inTrain <- createDataPartition(y=training$classe,p=0.75,list=F)
+training_training <- training[inTrain,]
+training_testing <- training[-inTrain,]
+```
+
+Now, we will build our model using the training_training dataset.
+
+We have all numerical variables apart from the variable (classe) which is a factor variable. Let's check correlation between the columns and find out if we have correlation amongst them.
+
+```{r}
+M <- abs(cor(training_training[,-53]))
+diag(M) <- 0
+nrow(which(M > 0.8,arr.ind = T))/2
+```
+
+There are 19 pairs which are highly correlated with each other. Let's use principle component analysis using 95 % variance.
+
+We will use random forest method to train the model. The reason behind chosing random forest method is the nature of prediction where measurements will highly depend on the way the exercise is performed. So, this method will rank the importance of variables in regression in natural way. Also, there is no need of cross-validation with this method as it takes around 63% of the bootstrapped data for training the model and rest of the data for testing the model as OOB error.
+
+```{r}
+suppressWarnings(library(randomForest,quietly = T))
+modFit_pca <- train(classe ~ .,method="rf", preProcess = "pca", data = training_training)
+```
+
+*Accuracy with test data*
+
+```{r}
+confusionMatrix(training_testing$classe,predict(modFit_pca,newdata=training_testing))
+```
+Out of Sample error: 2.6 %
+Using preprocessing with PCA method seems to have a pretty good accuracy and OOB (2.2 %) but let's try to built the model without any preprocessing and see if accuracy and OOB improves.
+
+```{r}
+modFit <- train(classe ~ .,method="rf", data = training_training)
+```
+
+Let's check the final model.
+
+```{r}
+modFit$finalModel
+```
+
+Out of Bag error comes out to be 0.61 % which is pretty good.
+
+
+*Accuracy with test data*
+
+```{r}
+ confusionMatrix(training_testing$classe,predict(modFit,newdata=training_testing))
+```
+
+Out of sample error: 1.8 %.
+This seems to be performing extremely well as the accuracy of the model is 99.37 %.
+
+### Prediction with Test data
+
+Let's use the final model to predict the outcome out of testing data.
+
+```{r}
+predict(modFit,newdata=testing)
+```
+
+**Note: Answers of the outcome have been loaded onto the site and they are 100 % correct.**
+
+*Accuracy with original testing data: 100 %.*
+
+### Conclusion:
+
+Random forest algorithm seems to be performing extremely well on cleansed data. Preprocessing with pca is not used as it costs some some accuracy. Cross validation is not used as this is not needed with random forests. 
+So, the model can be easily used to predict how well you are performing burbell lift based on data from sensors. Similarly, models can be built in for other type of exercises in order to predict the quality of exercise.
+
+
+
